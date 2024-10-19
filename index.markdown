@@ -5,11 +5,9 @@
 layout: home
 ---
 
-# あさぼん's site
+# 自作 Android アプリ
 
-## Android アプリ
-
-### バス時刻表
+## バス時刻表
 
 - [アプリの紹介(作成中)](/bus_timetable/)
 - [プライバシーポリシー](/bus_timetable_privacy_policy/)
