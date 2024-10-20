@@ -76,3 +76,6 @@ jobs:
           publish_branch: gh-pages-develop
           publish_dir: ./_site
           cname: preview.asabon.net
+      - name: Add baseurl
+        run: |
+          echo 'baseurl: "/preview"' >> _config.yml
