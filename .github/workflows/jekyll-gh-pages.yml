@@ -58,7 +58,7 @@ jobs:
   deploy-develop:
     if: github.ref == 'refs/heads/develop'
     environment:
-      name: github-pages-develop
+      name: github-pages
     runs-on: ubuntu-latest
     needs: build
     steps:
@@ -73,9 +73,7 @@ jobs:
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_branch: gh-pages-develop
           publish_dir: ./_site
-          cname: preview.asabon.net
       - name: Add baseurl
         run: |
           echo 'baseurl: "/preview"' >> _config.yml
