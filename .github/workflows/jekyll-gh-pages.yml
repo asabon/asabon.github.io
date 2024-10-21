@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      #- develop
   workflow_dispatch:
 
 permissions:
@@ -54,26 +53,3 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./_site
-
-  deploy-develop:
-    if: github.ref == 'refs/heads/develop'
-    environment:
-      name: github-pages
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: github-pages
-          path: ./_site
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./_site
-      - name: Add baseurl
-        run: |
-          echo 'baseurl: "/preview"' >> _config.yml
