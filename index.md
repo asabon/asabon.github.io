@@ -6,3 +6,5 @@
   - [プライバシーポリシー](bus_timetable/privacy_policy.md)
 - コミック進捗
   - [プライバシーポリシー](comic_progress/privacy_policy.md)
+- Place Keeper
+  - [プライバシーポリシー](place_keeper/privacy_policy.md)
