@@ -10,5 +10,5 @@
   - [プライバシーポリシー](comic_progress/privacy_policy.md)
 - Place Keeper
   - [プライバシーポリシー](place_keeper/privacy_policy.md)
-- Interval Timer
+- ジムキット（GymKit）
   - [プライバシーポリシー](interval_timer/privacy_policy.md)

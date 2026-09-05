@@ -2,9 +2,9 @@
 
 最終更新日: 2026年9月5日 / Last updated: September 5, 2026
 
-「Interval Timer」（以下、「本アプリ」）は、ユーザーのプライバシーを最大限に尊重し、個人情報の保護に努めています。本プライバシーポリシーでは、本アプリにおける情報の取り扱いについて説明します。
+「ジムキット（GymKit）」（以下、「本アプリ」）は、ユーザーのプライバシーを最大限に尊重し、個人情報の保護に努めています。本プライバシーポリシーでは、本アプリにおける情報の取り扱いについて説明します。
 
-The "Interval Timer" application (hereinafter referred to as "the App") respects your privacy and is committed to protecting your personal data. This Privacy Policy explains how information is handled within the App.
+The "GymKit" application (hereinafter referred to as "the App") respects your privacy and is committed to protecting your personal data. This Privacy Policy explains how information is handled within the App.
 
 ---
 
