@@ -1,4 +1,4 @@
-# asabon's web site
+﻿# asabon's web site
 
 ## 自作アプリ紹介
 
@@ -10,3 +10,5 @@
   - [プライバシーポリシー](comic_progress/privacy_policy.md)
 - Place Keeper
   - [プライバシーポリシー](place_keeper/privacy_policy.md)
+- Interval Timer
+  - [プライバシーポリシー](interval_timer/privacy_policy.md)
