@@ -1,6 +1,6 @@
-# Antigravity 開発・運用ガイドライン (asabon.github.io)
+# エージェント開発・運用ガイドライン (asabon.github.io)
 
-本リポジトリ (`asabon.github.io`) を Antigravity と共に保守・運用するための開発ルールおよびガイドラインです。
+本リポジトリ (`asabon.github.io`) を Antigravity などの AI エージェントと共に保守・運用するための開発ルールおよびガイドラインです。
 
 ## 1. 開発フロー (GitHub Flow)
 本リポジトリでは GitHub Flow に従って開発を行います。
