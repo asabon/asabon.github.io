@@ -9,7 +9,7 @@
   - リポジトリの保護ルールにより `main` への直接 push は拒否されます。
   - `main` は常にリモートの最新状態を追従する専用ブランチとし、ローカルの `main` への直接 commit も禁止とします。
   - すべての変更は、最新の `main` からトピックブランチを作成して行います。
-  - 誤コミット防止のため、`.githooks/pre-commit` にて `main` ブランチでのコミットをブロックする Git フックを用意しています（有効化: `git config core.hooksPath .githooks`）。
+  - 誤操作防止のため、`.githooks/` 内に `main` ブランチでのコミットを防止する `pre-commit` および `main` への push を防止する `pre-push` フックを用意しています（有効化: `git config core.hooksPath .githooks`）。
 - **ブランチの作成**
   - 作業内容に応じた明確なブランチ名を作成します（例: `feature/xxx`, `fix/xxx`, `add-xxx`, `update-xxx`）。
 - **コミットとプッシュ**
