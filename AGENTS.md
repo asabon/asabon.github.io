@@ -17,9 +17,11 @@
 - **プルリクエスト (PR) の作成**
   - GitHub CLI (`gh pr create`) を活用し、PR を作成します。
   - タイトルと変更内容のサマリーを記載します。
-- **マージ後のクリーンアップ**
+- **マージとクリーンアップ**
+  - PR のマージ方式には通常のマージコミットのほか、履歴を1つにまとめる「Squash and merge (スカッシュマージ)」も用いられます。
   - PR がマージされたら、ローカルの `main` ブランチを最新に同期します (`git checkout main && git pull origin main`)。
-  - 不要になったローカル作業ブランチおよびリモートトラッキング参照を整理します (`git branch -d <branch-name>`, `git remote prune origin`)。
+  - スカッシュマージの場合、コミットハッシュが `main` 上で新しく生成されるため、通常の `git branch -d` では未マージ警告（not fully merged）が出ることがあります。PR のマージが完了していることを確認の上、必要に応じて `git branch -D <branch-name>` で作業ブランチを削除・整理します。
+  - 不要になったリモート追跡ブランチを整理します (`git remote prune origin` または `git fetch --prune`)。
 
 ## 2. リポジトリ概要・構成
 - 本リポジトリは GitHub Pages (`https://asabon.github.io` / `https://www.asabon.net/`) で公開される静的サイトおよびアプリ関連ページです。
