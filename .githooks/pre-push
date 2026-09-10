@@ -1,0 +1,19 @@
+#!/bin/sh
+# main ブランチへの push をブロックするフック
+
+remote="$1"
+url="$2"
+
+while read local_ref local_oid remote_ref remote_oid
+do
+    # リモートの main ブランチに対する push をブロック
+    if [ "$remote_ref" = "refs/heads/main" ]; then
+        echo "==================================================================" >&2
+        echo " [ERROR] main ブランチへの直接 push は禁止されています。" >&2
+        echo " 変更はトピックブランチから Pull Request を作成して反映してください。" >&2
+        echo "==================================================================" >&2
+        exit 1
+    fi
+done
+
+exit 0

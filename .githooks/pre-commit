@@ -1,0 +1,13 @@
+#!/bin/sh
+# main ブランチへの直接コミットをブロックするフック
+
+current_branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+
+if [ "$current_branch" = "main" ]; then
+    echo "==================================================================" >&2
+    echo " [ERROR] main ブランチへの直接コミットは禁止されています。" >&2
+    echo " 作業用のトピックブランチを作成してからコミットしてください。" >&2
+    echo " 例: git checkout -b feature/xxx (または add-xxx, fix-xxx)" >&2
+    echo "==================================================================" >&2
+    exit 1
+fi
