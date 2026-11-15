@@ -1,0 +1,76 @@
+name: AI Review Retry Orchestrator
+
+on:
+  schedule:
+    # 毎正時(00分)はGitHub全体の負荷集中で遅延・ドロップしやすいため、あえて中途半端な分(例: 17分)に設定
+    - cron: '17 * * * *'
+  workflow_dispatch: # Actions タブから手動実行可能
+
+concurrency:
+  group: ai-review-retry-orchestrator
+  cancel-in-progress: false
+
+jobs:
+  retry-skipped-reviews:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Process Skipped PRs across asabon and asabon-lab
+        env:
+          # asabon と asabon-lab 両方にアクセス権を持つ PAT を設定
+          GH_TOKEN: ${{ secrets.ORG_REVIEW_TRIGGER_PAT }}
+          COOLDOWN_HOURS: 2
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "Error: ORG_REVIEW_TRIGGER_PAT secret is not configured."
+            exit 1
+          fi
+
+          OWNERS=("asabon" "asabon-lab")
+          NOW_EPOCH=$(date +%s)
+          COOLDOWN_SEC=$((COOLDOWN_HOURS * 3600))
+
+          for OWNER in "${OWNERS[@]}"; do
+            echo "=================================================="
+            echo "Searching open PRs with 'ai: skipped' in: $OWNER"
+            echo "=================================================="
+
+            PR_LIST=$(gh search prs --owner "$OWNER" --state open --label "ai: skipped" \
+              --json repository,number --jq '.[] | "\(.repository.nameWithOwner)#\(.number)"')
+
+            if [ -z "$PR_LIST" ]; then
+              echo "No skipped PRs found for $OWNER."
+              continue
+            fi
+
+            for ITEM in $PR_LIST; do
+              REPO=$(echo "$ITEM" | cut -d'#' -f1)
+              PR_NUM=$(echo "$ITEM" | cut -d'#' -f2)
+              echo "--- Checking $REPO #$PR_NUM ---"
+
+              # 直近の @coderabbitai review コメントの日時を取得
+              LAST_TRIGGER=$(gh api "repos/$REPO/issues/$PR_NUM/comments" \
+                --jq '[.[] | select(.body | contains("@coderabbitai review")) | .created_at] | last // empty')
+
+              if [ -n "$LAST_TRIGGER" ]; then
+                # 日時文字列をエポック秒に変換
+                LAST_EPOCH=$(date -d "$LAST_TRIGGER" +%s 2>/dev/null || date -jf "%Y-%m-%dT%H:%M:%SZ" "$LAST_TRIGGER" +%s)
+                DIFF_SEC=$((NOW_EPOCH - LAST_EPOCH))
+
+                if [ "$DIFF_SEC" -lt "$COOLDOWN_SEC" ]; then
+                  ELAPSED_MIN=$((DIFF_SEC / 60))
+                  echo "Skipping: Last retry was only ${ELAPSED_MIN}m ago (Cooldown: ${COOLDOWN_HOURS}h)."
+                  continue
+                fi
+              fi
+
+              # 2時間以上経過または初回: レビューを再キック
+              echo "Triggering review for $REPO #$PR_NUM..."
+              gh pr comment "$PR_NUM" --repo "$REPO" --body "@coderabbitai review"
+
+              # 1時間に1回の上限枠を守るため、1件キックしたら今回の実行は終了
+              echo "Successfully triggered review for $REPO #$PR_NUM. Exiting to preserve hourly rate limit."
+              exit 0
+            done
+          done
+
+          echo "No PRs were eligible for review retry in this run."
