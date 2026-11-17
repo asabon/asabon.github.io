@@ -64,15 +64,16 @@ jobs:
                 LATEST_COMMIT_EPOCH=$(date -d "$LATEST_COMMIT_DATE" +%s 2>/dev/null || date -jf "%Y-%m-%dT%H:%M:%SZ" "$LATEST_COMMIT_DATE" +%s)
               fi
 
-              # 直近の @coderabbitai review コメントの日時を取得
-              LAST_TRIGGER=$(gh api "repos/$REPO/issues/$PR_NUM/comments" \
-                --jq '[.[] | select(.body | contains("@coderabbitai review")) | .created_at] | last // empty')
+              # コメント一覧を取得し、直近の @coderabbitai review トリガーと CodeRabbit bot コメントを抽出
+              COMMENTS_JSON=$(gh api "repos/$REPO/issues/$PR_NUM/comments")
+              LAST_TRIGGER=$(echo "$COMMENTS_JSON" | jq -r '[.[] | select(.body | contains("@coderabbitai review")) | .created_at] | last // empty')
 
-              # 直近の CodeRabbit bot によるレビューおよびコメントの日時を取得
+              # 直近の CodeRabbit bot によるレビューおよびコメントの日時・本文を取得
               LAST_CR_REVIEW=$(gh api "repos/$REPO/pulls/$PR_NUM/reviews" \
                 --jq '[.[] | select(.user.login | test("coderabbitai")) | .submitted_at] | last // empty')
-              LAST_CR_COMMENT=$(gh api "repos/$REPO/issues/$PR_NUM/comments" \
-                --jq '[.[] | select(.user.login | test("coderabbitai")) | .created_at] | last // empty')
+              LAST_CR_COMMENT_OBJ=$(echo "$COMMENTS_JSON" | jq -c '[.[] | select(.user.login | test("coderabbitai"))] | last // empty')
+              LAST_CR_COMMENT=$(echo "$LAST_CR_COMMENT_OBJ" | jq -r '.created_at // empty')
+              LAST_CR_COMMENT_BODY=$(echo "$LAST_CR_COMMENT_OBJ" | jq -r '.body // empty')
 
               # 最も新しい AI 関連アクティビティ（レビュー・コメント・手動トリガー）の日時を特定
               LATEST_AI_EPOCH=0
@@ -93,6 +94,15 @@ jobs:
                   continue
                 fi
                 echo "Detected new commit(s) after last review for changes-requested PR."
+              fi
+
+              # フェイルセーフ: ラベルが ai: skipped のまま等であっても、直近の CodeRabbit コメントが
+              # 「すでに最新コミットをレビュー済み」を示しており、新コミットがなければスキップ
+              if [ -n "$LAST_CR_COMMENT_BODY" ] && echo "$LAST_CR_COMMENT_BODY" | grep -qi "already reviewed the last commit"; then
+                if [ "$LATEST_AI_EPOCH" -gt 0 ] && [ "$LATEST_COMMIT_EPOCH" -le "$LATEST_AI_EPOCH" ]; then
+                  echo "Skipping: CodeRabbit already reviewed the last commit (waiting for new commits)."
+                  continue
+                fi
               fi
 
               # クールダウン判定（直近の AI アクティビティから 55 分未満の場合はスキップ）
