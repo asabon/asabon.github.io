@@ -14,115 +14,20 @@ jobs:
   retry-reviews:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run unit tests
+        run: node --test .github/scripts/ai-review-retry.test.mjs
+
       - name: Process Skipped / Updated PRs across asabon and asabon-lab
         env:
           # asabon と asabon-lab 両方にアクセス権を持つ PAT を設定
           GH_TOKEN: ${{ secrets.ORG_REVIEW_TRIGGER_PAT }}
           COOLDOWN_MINUTES: 55
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "Error: ORG_REVIEW_TRIGGER_PAT secret is not configured."
-            exit 1
-          fi
-
-          OWNERS=("asabon" "asabon-lab")
-          NOW_EPOCH=$(date +%s)
-          COOLDOWN_SEC=$((COOLDOWN_MINUTES * 60))
-
-          for OWNER in "${OWNERS[@]}"; do
-            echo "=================================================="
-            echo "Searching open PRs with 'ai: skipped' or 'ai: changes-requested' in: $OWNER"
-            echo "=================================================="
-
-            SKIPPED_PRS=$(gh search prs --owner "$OWNER" --state open --label "ai: skipped" \
-              --json repository,number --jq '.[] | "\(.repository.nameWithOwner)#\(.number)"')
-            CHANGES_PRS=$(gh search prs --owner "$OWNER" --state open --label "ai: changes-requested" \
-              --json repository,number --jq '.[] | "\(.repository.nameWithOwner)#\(.number)"')
-
-            # 重複を排除して一覧化
-            PR_LIST=$(printf "%s\n%s\n" "$SKIPPED_PRS" "$CHANGES_PRS" | grep -v '^$' | sort -u)
-
-            if [ -z "$PR_LIST" ]; then
-              echo "No target PRs found for $OWNER."
-              continue
-            fi
-
-            for ITEM in $PR_LIST; do
-              REPO=$(echo "$ITEM" | cut -d'#' -f1)
-              PR_NUM=$(echo "$ITEM" | cut -d'#' -f2)
-              echo "--- Checking $REPO #$PR_NUM ---"
-
-              # PR のラベル一覧と最新コミット日時を取得
-              PR_DATA=$(gh pr view "$PR_NUM" --repo "$REPO" --json labels,commits \
-                --jq '{labels: [.labels[].name], latestCommit: .commits[-1].committedDate}')
-
-              HAS_SKIPPED=$(echo "$PR_DATA" | jq -r '.labels | contains(["ai: skipped"])')
-              HAS_CHANGES_REQ=$(echo "$PR_DATA" | jq -r '.labels | contains(["ai: changes-requested"])')
-              LATEST_COMMIT_DATE=$(echo "$PR_DATA" | jq -r '.latestCommit')
-              LATEST_COMMIT_EPOCH=0
-              if [ -n "$LATEST_COMMIT_DATE" ] && [ "$LATEST_COMMIT_DATE" != "null" ]; then
-                LATEST_COMMIT_EPOCH=$(date -d "$LATEST_COMMIT_DATE" +%s 2>/dev/null || date -jf "%Y-%m-%dT%H:%M:%SZ" "$LATEST_COMMIT_DATE" +%s)
-              fi
-
-              # コメント一覧を取得し、直近の @coderabbitai review トリガーと CodeRabbit bot コメントを抽出
-              COMMENTS_JSON=$(gh api "repos/$REPO/issues/$PR_NUM/comments")
-              LAST_TRIGGER=$(echo "$COMMENTS_JSON" | jq -r '[.[] | select(.body | contains("@coderabbitai review")) | .created_at] | last // empty')
-
-              # 直近の CodeRabbit bot によるレビューおよびコメントの日時・本文を取得
-              LAST_CR_REVIEW=$(gh api "repos/$REPO/pulls/$PR_NUM/reviews" \
-                --jq '[.[] | select(.user.login | test("coderabbitai")) | .submitted_at] | last // empty')
-              LAST_CR_COMMENT_OBJ=$(echo "$COMMENTS_JSON" | jq -c '[.[] | select(.user.login | test("coderabbitai"))] | last // empty')
-              LAST_CR_COMMENT=$(echo "$LAST_CR_COMMENT_OBJ" | jq -r '.created_at // empty')
-              LAST_CR_COMMENT_BODY=$(echo "$LAST_CR_COMMENT_OBJ" | jq -r '.body // empty')
-
-              # 最も新しい AI 関連アクティビティ（レビュー・コメント・手動トリガー）の日時を特定
-              LATEST_AI_EPOCH=0
-              for T in "$LAST_TRIGGER" "$LAST_CR_REVIEW" "$LAST_CR_COMMENT"; do
-                if [ -n "$T" ]; then
-                  T_EPOCH=$(date -d "$T" +%s 2>/dev/null || date -jf "%Y-%m-%dT%H:%M:%SZ" "$T" +%s)
-                  if [ "$T_EPOCH" -gt "$LATEST_AI_EPOCH" ]; then
-                    LATEST_AI_EPOCH=$T_EPOCH
-                  fi
-                fi
-              done
-
-              # ai: changes-requested が付いており、かつ ai: skipped でない場合:
-              # 直近の AI レビュー以降に新しいコミットがプッシュされていなければスキップ（修正待ち）
-              if [ "$HAS_CHANGES_REQ" = "true" ] && [ "$HAS_SKIPPED" != "true" ]; then
-                if [ "$LATEST_AI_EPOCH" -gt 0 ] && [ "$LATEST_COMMIT_EPOCH" -le "$LATEST_AI_EPOCH" ]; then
-                  echo "Skipping: No new commits pushed since last review/trigger (waiting for user changes)."
-                  continue
-                fi
-                echo "Detected new commit(s) after last review for changes-requested PR."
-              fi
-
-              # フェイルセーフ: ラベルが ai: skipped のまま等であっても、直近の CodeRabbit コメントが
-              # 「すでに最新コミットをレビュー済み」を示しており、新コミットがなければスキップ
-              if [ -n "$LAST_CR_COMMENT_BODY" ] && echo "$LAST_CR_COMMENT_BODY" | grep -qi "already reviewed the last commit"; then
-                if [ "$LATEST_AI_EPOCH" -gt 0 ] && [ "$LATEST_COMMIT_EPOCH" -le "$LATEST_AI_EPOCH" ]; then
-                  echo "Skipping: CodeRabbit already reviewed the last commit (waiting for new commits)."
-                  continue
-                fi
-              fi
-
-              # クールダウン判定（直近の AI アクティビティから 55 分未満の場合はスキップ）
-              if [ "$LATEST_AI_EPOCH" -gt 0 ]; then
-                DIFF_SEC=$((NOW_EPOCH - LATEST_AI_EPOCH))
-                if [ "$DIFF_SEC" -lt "$COOLDOWN_SEC" ]; then
-                  ELAPSED_MIN=$((DIFF_SEC / 60))
-                  echo "Skipping: Last AI activity was only ${ELAPSED_MIN}m ago (Cooldown: ${COOLDOWN_MINUTES}m)."
-                  continue
-                fi
-              fi
-
-              # 条件を満たした場合: レビューを再キック
-              echo "Triggering review for $REPO #$PR_NUM..."
-              gh pr comment "$PR_NUM" --repo "$REPO" --body "@coderabbitai review"
-
-              # 1時間に1回の上限枠を守るため、1件キックしたら今回の実行は終了
-              echo "Successfully triggered review for $REPO #$PR_NUM. Exiting to preserve hourly rate limit."
-              exit 0
-            done
-          done
-
-          echo "No PRs were eligible for review retry in this run."
+        run: node .github/scripts/ai-review-retry.mjs
