@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { evaluatePrRetry, parseTimestampMs } from './ai-review-retry.mjs';
+import {
+  buildSummaryMarkdown,
+  evaluatePrRetry,
+  parseTimestampMs,
+} from './ai-review-retry.mjs';
 
 const MIN = 60 * 1000;
 const BASE_TIME = Date.parse('2026-11-18T06:00:00Z');
@@ -25,6 +29,8 @@ test('triggers when ai: skipped has no prior AI activity', () => {
     nowMs: BASE_TIME,
   });
   assert.equal(result.shouldTrigger, true);
+  assert.equal(result.diagnostics.latestAiSource, 'none');
+  assert.equal(result.diagnostics.cooldownElapsedMin, null);
 });
 
 test('skips when last AI activity is within cooldown window', () => {
@@ -44,6 +50,8 @@ test('skips when last AI activity is within cooldown window', () => {
   });
   assert.equal(result.shouldTrigger, false);
   assert.match(result.reason, /30m ago/);
+  assert.equal(result.diagnostics.latestAiSource, 'trigger');
+  assert.equal(result.diagnostics.cooldownElapsedMin, 30);
 });
 
 test('triggers when ai: skipped (rate limited) has passed cooldown', () => {
@@ -61,6 +69,8 @@ test('triggers when ai: skipped (rate limited) has passed cooldown', () => {
     nowMs: BASE_TIME,
   });
   assert.equal(result.shouldTrigger, true);
+  assert.equal(result.diagnostics.latestAiSource, 'cr_comment');
+  assert.equal(result.diagnostics.cooldownElapsedMin, 60);
 });
 
 test('failsafe skips when ai: skipped has "Already reviewed" and no new commits', () => {
@@ -113,6 +123,7 @@ test('skips ai: changes-requested when no new commits pushed after review', () =
   });
   assert.equal(result.shouldTrigger, false);
   assert.match(result.reason, /No new commits pushed/);
+  assert.equal(result.diagnostics.latestAiSource, 'cr_review');
 });
 
 test('skips ai: changes-requested with new commit if still in cooldown', () => {
@@ -148,4 +159,54 @@ test('triggers ai: changes-requested when new commit exists and cooldown passed'
   });
   assert.equal(result.shouldTrigger, true);
   assert.match(result.reason, /Detected new commit/);
+});
+
+test('buildSummaryMarkdown formats empty and populated records cleanly', () => {
+  const emptyMd = buildSummaryMarkdown({
+    runAtIso: '2026-11-20T06:00:00.000Z',
+    cooldownMinutes: 55,
+    records: [],
+  });
+  assert.match(emptyMd, /Candidate PRs found\*\*: `0`/);
+  assert.match(emptyMd, /No target PRs were found/);
+
+  const populatedMd = buildSummaryMarkdown({
+    runAtIso: '2026-11-20T06:00:00.000Z',
+    cooldownMinutes: 55,
+    records: [
+      {
+        repo: 'asabon/vajra',
+        number: 6,
+        action: 'Skipped',
+        labels: ['ai: changes-requested'],
+        latestCommitIso: '2026-11-19T00:00:00.000Z',
+        latestAiIso: '2026-11-19T01:00:00.000Z',
+        latestAiSource: 'cr_review',
+        cooldownElapsedMin: 1800,
+        reason: 'Skipping: No new commits pushed.',
+      },
+      {
+        repo: 'asabon/agq-hud',
+        number: 10,
+        action: 'Triggered',
+        labels: ['ai: skipped'],
+        latestCommitIso: '2026-11-20T04:00:00.000Z',
+        latestAiIso: 'none',
+        latestAiSource: 'none',
+        cooldownElapsedMin: null,
+        reason: 'Eligible for review retry.',
+        commentUrl: 'https://github.com/asabon/agq-hud/pull/10#issuecomment-1',
+      },
+      {
+        repo: 'asabon/other',
+        number: 2,
+        action: 'Deferred',
+        reason: 'Deferred to preserve 1-review-per-hour rate limit.',
+      },
+    ],
+  });
+
+  assert.match(populatedMd, /\[asabon\/vajra#6\]/);
+  assert.match(populatedMd, /\[Triggered\]\(https:\/\/github\.com\/asabon\/agq-hud\/pull\/10#issuecomment-1\)/);
+  assert.match(populatedMd, /\| Deferred \|/);
 });
