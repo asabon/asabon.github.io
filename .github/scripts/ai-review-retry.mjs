@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const DEFAULT_OWNERS = ['asabon', 'asabon-lab'];
@@ -35,6 +36,32 @@ function getLatestTimestampMs(items, getTimestamp) {
 }
 
 /**
+ * 直近の AI アクティビティの最大タイムスタンプとその発生元を特定する。
+ * @param {{ lastTriggerMs: number, lastCrCommentMs: number, lastCrReviewMs: number }} timestamps
+ * @returns {{ latestAiMs: number, latestAiSource: 'trigger' | 'cr_comment' | 'cr_review' | 'none' }}
+ */
+function resolveLatestAiActivity({ lastTriggerMs, lastCrCommentMs, lastCrReviewMs }) {
+  const candidates = [
+    { source: /** @type {const} */ ('cr_review'), ms: lastCrReviewMs },
+    { source: /** @type {const} */ ('cr_comment'), ms: lastCrCommentMs },
+    { source: /** @type {const} */ ('trigger'), ms: lastTriggerMs },
+  ];
+
+  let latestAiMs = 0;
+  /** @type {'trigger' | 'cr_comment' | 'cr_review' | 'none'} */
+  let latestAiSource = 'none';
+
+  for (const candidate of candidates) {
+    if (candidate.ms > latestAiMs) {
+      latestAiMs = candidate.ms;
+      latestAiSource = candidate.source;
+    }
+  }
+
+  return { latestAiMs, latestAiSource };
+}
+
+/**
  * PR の現在の状態からレビュー再キックを実行すべきか判定する。
  *
  * @param {object} params
@@ -44,7 +71,17 @@ function getLatestTimestampMs(items, getTimestamp) {
  * @param {Array<{ user?: { login?: string }, submitted_at?: string }>} params.reviews
  * @param {number} [params.nowMs]
  * @param {number} [params.cooldownMinutes]
- * @returns {{ shouldTrigger: boolean, reason: string }}
+ * @returns {{
+ *   shouldTrigger: boolean,
+ *   reason: string,
+ *   diagnostics: {
+ *     labels: string[],
+ *     latestCommitIso: string,
+ *     latestAiIso: string,
+ *     latestAiSource: 'trigger' | 'cr_comment' | 'cr_review' | 'none',
+ *     cooldownElapsedMin: number | null,
+ *   }
+ * }}
  */
 export function evaluatePrRetry({
   labels,
@@ -71,7 +108,22 @@ export function evaluatePrRetry({
   const lastTriggerMs = getLatestTimestampMs(triggerComments, (c) => c.created_at);
   const lastCrCommentMs = getLatestTimestampMs(crComments, (c) => c.created_at);
   const lastCrReviewMs = getLatestTimestampMs(crReviews, (r) => r.submitted_at);
-  const latestAiMs = Math.max(lastTriggerMs, lastCrCommentMs, lastCrReviewMs);
+  const { latestAiMs, latestAiSource } = resolveLatestAiActivity({
+    lastTriggerMs,
+    lastCrCommentMs,
+    lastCrReviewMs,
+  });
+
+  const cooldownElapsedMin =
+    latestAiMs > 0 ? Math.floor((nowMs - latestAiMs) / 60000) : null;
+
+  const diagnostics = {
+    labels,
+    latestCommitIso: latestCommitMs > 0 ? new Date(latestCommitMs).toISOString() : 'none',
+    latestAiIso: latestAiMs > 0 ? new Date(latestAiMs).toISOString() : 'none',
+    latestAiSource,
+    cooldownElapsedMin,
+  };
 
   // ai: changes-requested が付いており、かつ ai: skipped でない場合:
   // 直近の AI レビュー以降に新しいコミットがプッシュされていなければスキップ（修正待ち）
@@ -80,6 +132,7 @@ export function evaluatePrRetry({
       return {
         shouldTrigger: false,
         reason: 'Skipping: No new commits pushed since last review/trigger (waiting for user changes).',
+        diagnostics,
       };
     }
   }
@@ -96,6 +149,7 @@ export function evaluatePrRetry({
     return {
       shouldTrigger: false,
       reason: 'Skipping: CodeRabbit already reviewed the last commit (waiting for new commits).',
+      diagnostics,
     };
   }
 
@@ -104,10 +158,10 @@ export function evaluatePrRetry({
   if (latestAiMs > 0) {
     const diffMs = nowMs - latestAiMs;
     if (diffMs < cooldownMs) {
-      const elapsedMin = Math.floor(diffMs / 60000);
       return {
         shouldTrigger: false,
-        reason: `Skipping: Last AI activity was only ${elapsedMin}m ago (Cooldown: ${cooldownMinutes}m).`,
+        reason: `Skipping: Last AI activity was only ${cooldownElapsedMin}m ago (Cooldown: ${cooldownMinutes}m).`,
+        diagnostics,
       };
     }
   }
@@ -117,7 +171,72 @@ export function evaluatePrRetry({
       ? 'Detected new commit(s) after last review for changes-requested PR.'
       : 'Eligible for review retry.';
 
-  return { shouldTrigger: true, reason };
+  return { shouldTrigger: true, reason, diagnostics };
+}
+
+/**
+ * GitHub Actions の Job Summary 向け Markdown テーブルを生成する。
+ * @param {object} params
+ * @param {string} params.runAtIso
+ * @param {number} params.cooldownMinutes
+ * @param {Array<{
+ *   repo: string,
+ *   number: number,
+ *   action: 'Triggered' | 'Skipped' | 'Deferred',
+ *   labels?: string[],
+ *   latestCommitIso?: string,
+ *   latestAiIso?: string,
+ *   latestAiSource?: string,
+ *   cooldownElapsedMin?: number | null,
+ *   reason: string,
+ *   commentUrl?: string,
+ * }>} params.records
+ * @returns {string}
+ */
+export function buildSummaryMarkdown({ runAtIso, cooldownMinutes, records }) {
+  const lines = [
+    '## AI Review Retry Orchestrator Summary',
+    '',
+    `- **Run at (UTC)**: \`${runAtIso}\``,
+    `- **Cooldown**: \`${cooldownMinutes}m\``,
+    `- **Candidate PRs found**: \`${records.length}\``,
+    '',
+  ];
+
+  if (records.length === 0) {
+    lines.push('No target PRs were found across configured owners.');
+    lines.push('');
+    return lines.join('\n');
+  }
+
+  lines.push(
+    '| PR | Labels | Latest Commit | Latest AI (Source) | Result | Reason |',
+  );
+  lines.push('| :--- | :--- | :--- | :--- | :--- | :--- |');
+
+  for (const rec of records) {
+    const prLink = `[${rec.repo}#${rec.number}](https://github.com/${rec.repo}/pull/${rec.number})`;
+    const labelsText = rec.labels?.length ? rec.labels.map((l) => `\`${l}\``).join(', ') : '-';
+    const commitText = rec.latestCommitIso ? `\`${rec.latestCommitIso}\`` : '-';
+    const aiText =
+      rec.latestAiIso && rec.latestAiIso !== 'none'
+        ? `\`${rec.latestAiIso}\` (${rec.latestAiSource}, ${rec.cooldownElapsedMin ?? '?'}m ago)`
+        : rec.latestAiIso === 'none'
+          ? '`none`'
+          : '-';
+    const resultText =
+      rec.action === 'Triggered' && rec.commentUrl
+        ? `[Triggered](${rec.commentUrl})`
+        : rec.action;
+    const escapedReason = rec.reason.replace(/\|/g, '\\|');
+
+    lines.push(
+      `| ${prLink} | ${labelsText} | ${commitText} | ${aiText} | ${resultText} | ${escapedReason} |`,
+    );
+  }
+
+  lines.push('');
+  return lines.join('\n');
 }
 
 /**
@@ -204,6 +323,10 @@ export function main() {
       ? parsedCooldown
       : DEFAULT_COOLDOWN_MINUTES;
   const nowMs = Date.now();
+  const runAtIso = new Date(nowMs).toISOString();
+
+  /** @type {Array<{ repo: string, number: number }>} */
+  const allCandidates = [];
 
   for (const owner of DEFAULT_OWNERS) {
     console.log('==================================================');
@@ -218,67 +341,122 @@ export function main() {
       continue;
     }
 
-    for (const { repo, number } of prList) {
-      console.log(`--- Checking ${repo} #${number} ---`);
+    console.log(
+      `Found ${prList.length} candidate PR(s) for ${owner}: ${prList.map((p) => `${p.repo}#${p.number}`).join(', ')}`,
+    );
+    allCandidates.push(...prList);
+  }
 
-      const prData =
-        runGhJson([
-          'pr',
-          'view',
-          String(number),
-          '--repo',
-          repo,
-          '--json',
-          'labels,commits',
-        ]) ?? {};
+  /** @type {Parameters<typeof buildSummaryMarkdown>[0]['records']} */
+  const records = [];
+  let triggered = false;
 
-      const labels = (prData.labels ?? []).map((l) => l.name);
-      const latestCommitDate = prData.commits?.at(-1)?.committedDate ?? null;
-
-      const comments = fetchPaginatedArray(`repos/${repo}/issues/${number}/comments`);
-      const reviews = fetchPaginatedArray(`repos/${repo}/pulls/${number}/reviews`);
-
-      const result = evaluatePrRetry({
-        labels,
-        latestCommitDate,
-        comments,
-        reviews,
-        nowMs,
-        cooldownMinutes,
+  for (const { repo, number } of allCandidates) {
+    if (triggered) {
+      records.push({
+        repo,
+        number,
+        action: 'Deferred',
+        reason: 'Deferred to preserve 1-review-per-hour rate limit.',
       });
+      continue;
+    }
 
-      if (!result.shouldTrigger) {
-        console.log(result.reason);
-        continue;
-      }
+    console.log(`--- Checking ${repo} #${number} ---`);
 
-      if (result.reason !== 'Eligible for review retry.') {
-        console.log(result.reason);
-      }
-
-      console.log(`Triggering review for ${repo} #${number}...`);
-      const commentUrl = runGh([
+    const prData =
+      runGhJson([
         'pr',
-        'comment',
+        'view',
         String(number),
         '--repo',
         repo,
-        '--body',
-        TRIGGER_COMMENT_BODY,
-      ]);
-      if (commentUrl) {
-        console.log(commentUrl);
-      }
+        '--json',
+        'labels,commits',
+      ]) ?? {};
 
-      // 1時間に1回の上限枠を守るため、1件キックしたら今回の実行は終了
-      console.log(
-        `Successfully triggered review for ${repo} #${number}. Exiting to preserve hourly rate limit.`,
-      );
-      return;
+    const labels = (prData.labels ?? []).map((l) => l.name);
+    const latestCommitDate = prData.commits?.at(-1)?.committedDate ?? null;
+
+    const comments = fetchPaginatedArray(`repos/${repo}/issues/${number}/comments`);
+    const reviews = fetchPaginatedArray(`repos/${repo}/pulls/${number}/reviews`);
+
+    const result = evaluatePrRetry({
+      labels,
+      latestCommitDate,
+      comments,
+      reviews,
+      nowMs,
+      cooldownMinutes,
+    });
+
+    const { diagnostics } = result;
+    const elapsedStr =
+      diagnostics.cooldownElapsedMin !== null
+        ? `${diagnostics.cooldownElapsedMin}m ago`
+        : 'n/a';
+    console.log(`  Labels: ${diagnostics.labels.join(', ') || '(none)'}`);
+    console.log(`  Latest commit: ${diagnostics.latestCommitIso}`);
+    console.log(
+      `  Latest AI activity: ${diagnostics.latestAiIso} (source: ${diagnostics.latestAiSource}, elapsed: ${elapsedStr})`,
+    );
+
+    if (!result.shouldTrigger) {
+      console.log(`  Decision: ${result.reason}`);
+      records.push({
+        repo,
+        number,
+        action: 'Skipped',
+        ...diagnostics,
+        reason: result.reason,
+      });
+      continue;
     }
+
+    if (result.reason !== 'Eligible for review retry.') {
+      console.log(`  Note: ${result.reason}`);
+    }
+
+    console.log(`  Triggering review for ${repo} #${number}...`);
+    const commentUrl = runGh([
+      'pr',
+      'comment',
+      String(number),
+      '--repo',
+      repo,
+      '--body',
+      TRIGGER_COMMENT_BODY,
+    ]);
+    if (commentUrl) {
+      console.log(`  Comment URL: ${commentUrl}`);
+    }
+
+    console.log(
+      `Successfully triggered review for ${repo} #${number}. Stopping further triggers to preserve hourly rate limit.`,
+    );
+    records.push({
+      repo,
+      number,
+      action: 'Triggered',
+      ...diagnostics,
+      reason: result.reason,
+      commentUrl,
+    });
+    triggered = true;
   }
 
-  console.log('No PRs were eligible for review retry in this run.');
+  if (!triggered) {
+    console.log('No PRs were eligible for review retry in this run.');
+  }
+
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    const markdown = buildSummaryMarkdown({
+      runAtIso,
+      cooldownMinutes,
+      records,
+    });
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, markdown, 'utf8');
+  }
 }
 
 if (
