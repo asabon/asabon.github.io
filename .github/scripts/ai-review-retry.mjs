@@ -137,7 +137,17 @@ export function evaluatePrRetry({
     }
   }
 
-  // フェイルセーフ: ラベルが ai: skipped のまま等であっても、直近の CodeRabbit コメントが
+  // フェイルセーフ1: ラベルが ai: skipped のまま等であっても、最新コミット以降に
+  // CodeRabbit による Pull Request Review が既に投稿されていればスキップ
+  if (lastCrReviewMs > 0 && latestCommitMs <= lastCrReviewMs) {
+    return {
+      shouldTrigger: false,
+      reason: 'Skipping: CodeRabbit review already exists for the latest commit (waiting for new commits).',
+      diagnostics,
+    };
+  }
+
+  // フェイルセーフ2: ラベルが ai: skipped のまま等であっても、直近の CodeRabbit コメントが
   // 「すでに最新コミットをレビュー済み」を示しており、新コミットがなければスキップ
   const lastCrComment = crComments.at(-1);
   if (
