@@ -4,8 +4,11 @@ import { pathToFileURL } from 'node:url';
 
 const DEFAULT_OWNERS = ['asabon', 'asabon-lab'];
 const DEFAULT_COOLDOWN_MINUTES = 55;
+const DEFAULT_COMMIT_GRACE_MINUTES = 10;
 const LABEL_SKIPPED = 'ai: skipped';
 const LABEL_CHANGES_REQUESTED = 'ai: changes-requested';
+const LABEL_NOT_REVIEWED = 'ai: not-reviewed';
+const TARGET_LABELS = [LABEL_SKIPPED, LABEL_CHANGES_REQUESTED, LABEL_NOT_REVIEWED];
 const TRIGGER_COMMENT_BODY = '@coderabbitai review';
 
 /**
@@ -71,6 +74,7 @@ function resolveLatestAiActivity({ lastTriggerMs, lastCrCommentMs, lastCrReviewM
  * @param {Array<{ user?: { login?: string }, submitted_at?: string }>} params.reviews
  * @param {number} [params.nowMs]
  * @param {number} [params.cooldownMinutes]
+ * @param {number} [params.commitGraceMinutes]
  * @returns {{
  *   shouldTrigger: boolean,
  *   reason: string,
@@ -90,6 +94,7 @@ export function evaluatePrRetry({
   reviews,
   nowMs = Date.now(),
   cooldownMinutes = DEFAULT_COOLDOWN_MINUTES,
+  commitGraceMinutes = DEFAULT_COMMIT_GRACE_MINUTES,
 }) {
   const hasSkipped = labels.includes(LABEL_SKIPPED);
   const hasChangesRequested = labels.includes(LABEL_CHANGES_REQUESTED);
@@ -171,6 +176,20 @@ export function evaluatePrRetry({
       return {
         shouldTrigger: false,
         reason: `Skipping: Last AI activity was only ${cooldownElapsedMin}m ago (Cooldown: ${cooldownMinutes}m).`,
+        diagnostics,
+      };
+    }
+  }
+
+  // コミット直後の待機ガード（自動レビュー進行中との重複キックを防止）
+  const commitGraceMs = commitGraceMinutes * 60 * 1000;
+  if (commitGraceMinutes > 0 && latestCommitMs > 0) {
+    const commitDiffMs = nowMs - latestCommitMs;
+    if (commitDiffMs >= 0 && commitDiffMs < commitGraceMs) {
+      const commitElapsedMin = Math.floor(commitDiffMs / 60000);
+      return {
+        shouldTrigger: false,
+        reason: `Skipping: Latest commit was only ${commitElapsedMin}m ago (waiting ${commitGraceMinutes}m for automatic review).`,
         diagnostics,
       };
     }
@@ -277,7 +296,7 @@ function searchTargetPrs(owner) {
   const seen = new Set();
   const targets = [];
 
-  for (const label of [LABEL_SKIPPED, LABEL_CHANGES_REQUESTED]) {
+  for (const label of TARGET_LABELS) {
     const prs =
       runGhJson([
         'search',
@@ -332,6 +351,11 @@ export function main() {
     Number.isFinite(parsedCooldown) && parsedCooldown > 0
       ? parsedCooldown
       : DEFAULT_COOLDOWN_MINUTES;
+  const parsedGrace = Number(process.env.COMMIT_GRACE_MINUTES);
+  const commitGraceMinutes =
+    Number.isFinite(parsedGrace) && parsedGrace >= 0
+      ? parsedGrace
+      : DEFAULT_COMMIT_GRACE_MINUTES;
   const nowMs = Date.now();
   const runAtIso = new Date(nowMs).toISOString();
 
@@ -341,7 +365,7 @@ export function main() {
   for (const owner of DEFAULT_OWNERS) {
     console.log('==================================================');
     console.log(
-      `Searching open PRs with '${LABEL_SKIPPED}' or '${LABEL_CHANGES_REQUESTED}' in: ${owner}`,
+      `Searching open PRs with ${TARGET_LABELS.map((l) => `'${l}'`).join(', ')} in: ${owner}`,
     );
     console.log('==================================================');
 
@@ -398,6 +422,7 @@ export function main() {
       reviews,
       nowMs,
       cooldownMinutes,
+      commitGraceMinutes,
     });
 
     const { diagnostics } = result;
