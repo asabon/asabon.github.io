@@ -108,6 +108,46 @@ test('triggers when "Already reviewed" is followed by a newer commit and cooldow
   assert.equal(result.shouldTrigger, true);
 });
 
+test('failsafe skips when ai: skipped has a CodeRabbit review after latest commit', () => {
+  const result = evaluatePrRetry({
+    labels: ['ai: skipped'],
+    latestCommitDate: isoAt(-180),
+    comments: [
+      {
+        user: { login: 'coderabbitai' },
+        body: 'Review finished.',
+        created_at: isoAt(-175),
+      },
+    ],
+    reviews: [
+      {
+        user: { login: 'coderabbitai' },
+        submitted_at: isoAt(-170),
+      },
+    ],
+    nowMs: BASE_TIME,
+  });
+  assert.equal(result.shouldTrigger, false);
+  assert.match(result.reason, /CodeRabbit review already exists/);
+  assert.equal(result.diagnostics.latestAiSource, 'cr_review');
+});
+
+test('triggers when ai: skipped has an older CodeRabbit review followed by a newer commit', () => {
+  const result = evaluatePrRetry({
+    labels: ['ai: skipped'],
+    latestCommitDate: isoAt(-60),
+    comments: [],
+    reviews: [
+      {
+        user: { login: 'coderabbitai' },
+        submitted_at: isoAt(-120),
+      },
+    ],
+    nowMs: BASE_TIME,
+  });
+  assert.equal(result.shouldTrigger, true);
+});
+
 test('skips ai: changes-requested when no new commits pushed after review', () => {
   const result = evaluatePrRetry({
     labels: ['ai: changes-requested'],
