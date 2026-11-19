@@ -201,6 +201,58 @@ test('triggers ai: changes-requested when new commit exists and cooldown passed'
   assert.match(result.reason, /Detected new commit/);
 });
 
+test('skips ai: not-reviewed when latest commit is within commit grace period', () => {
+  const result = evaluatePrRetry({
+    labels: ['ai: not-reviewed'],
+    latestCommitDate: isoAt(-3),
+    comments: [],
+    reviews: [
+      {
+        user: { login: 'coderabbitai' },
+        submitted_at: isoAt(-120),
+      },
+    ],
+    nowMs: BASE_TIME,
+    commitGraceMinutes: 10,
+  });
+  assert.equal(result.shouldTrigger, false);
+  assert.match(result.reason, /Latest commit was only 3m ago/);
+});
+
+test('triggers ai: not-reviewed when commit grace period and cooldown passed', () => {
+  const result = evaluatePrRetry({
+    labels: ['ai: not-reviewed'],
+    latestCommitDate: isoAt(-20),
+    comments: [],
+    reviews: [
+      {
+        user: { login: 'coderabbitai' },
+        submitted_at: isoAt(-120),
+      },
+    ],
+    nowMs: BASE_TIME,
+    commitGraceMinutes: 10,
+  });
+  assert.equal(result.shouldTrigger, true);
+});
+
+test('skips ai: not-reviewed if CodeRabbit review already exists after latest commit', () => {
+  const result = evaluatePrRetry({
+    labels: ['ai: not-reviewed'],
+    latestCommitDate: isoAt(-60),
+    comments: [],
+    reviews: [
+      {
+        user: { login: 'coderabbitai' },
+        submitted_at: isoAt(-30),
+      },
+    ],
+    nowMs: BASE_TIME,
+  });
+  assert.equal(result.shouldTrigger, false);
+  assert.match(result.reason, /CodeRabbit review already exists/);
+});
+
 test('buildSummaryMarkdown formats empty and populated records cleanly', () => {
   const emptyMd = buildSummaryMarkdown({
     runAtIso: '2026-11-20T06:00:00.000Z',
